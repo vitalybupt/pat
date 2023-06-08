@@ -1,0 +1,151 @@
+#!/bin/bash
+base_dir="/mnt/flash/pat_workspace"
+tmp_dir=$basedir"/.tmp"
+count=0
+
+unset -v event comment loop
+
+# default event list
+declare -a events=(
+    cycles
+    instructions
+    L1-dcache-load-misses
+    cache-misses
+    branch-load-misses
+)
+declare -A events_map
+for key in "${!events[@]}"; do events_map[${events[$key]}]="$key"; done
+
+#default loop number
+loop=10
+#default sample_rate
+sample_rate=s # 's' stand for small, 'm' for medium, 'l' for large
+
+while getopts ":he:m:l:r:" option
+do
+  case "${option}" in
+      e)
+	  e=(${OPTARG})
+	  [ ! -n "${events_map[$e]}" ] && echo "Event: $e is not supported" >&2 && exit 3;
+          events=($e);;
+      m)
+	  comment=${OPTARG};;
+      l)
+	  loop=${OPTARG};;
+      r)
+	  sample_rate=${OPTARG};;
+      h)
+	  echo "show usage!";;
+      :)
+	  echo "$0: Must suppply an argument to -$OPTARG." >&2
+	  exit 1;;
+      ?)
+          echo "Invalid option: -${OPTARG}."
+          exit 2;;
+  esac
+done
+
+shift "$((OPTIND - 1))"
+
+#convert sample rate
+case $sample_rate in
+    s)
+	sample_rate="-F 99";;
+    m)
+	sample_rate="-F 299";;
+    l)
+	sample_rate="-F 499";;
+    *)
+	echo “User Selected Sample Rate Not Supported!”
+	exit 1
+esac
+
+# check if workspace set in environment variable
+# if yes we will use it as base_dir
+# else default location will be used
+if [ -v PAT_WOKRSPACE ]
+then
+    if [ ! -d $PAT_WORKSPACE ]
+       then
+	   mkdir $PAT_WORKSPACE
+    fi
+    base_dir=$PAT_WORKSPACE
+fi
+
+if [ ! -d $base_dir ]
+then
+    mkdir $base_dir
+fi
+
+# calculate the event we want to monitored
+mon_events=""
+for e in "${events[@]}"; do
+    tmp=" -e $e "
+    mon_events=$mon_events$tmp
+done
+
+# construct backup_dir for this sample
+days_date=$(date +'%m%d%Y')
+sample_dir=$base_dir"/"$days_date
+sample_dir=`echo $sample_dir | tr '[:upper:]' '[:lower:]'`
+
+if [ ! -d $sample_dir ]
+then
+   mkdir $sample_dir
+fi
+
+seconds_date=$(date +'%H%M%S')
+sample_dir=$sample_dir"/"$seconds_date
+sample_dir=`echo $sample_dir | tr '[:upper:]' '[:lower:]'`
+if [ ! -d $sample_dir ]
+then
+    mkdir $sample_dir
+fi
+
+tmp_dir=$sample_dir/.tmp
+mkdir $tmp_dir
+
+# handle ctrl_c
+trap ctrl_c INT
+
+function ctrl_c() {
+    if [  -d $sample_dir ]
+    then
+	rm -rf $sample_dir
+    fi
+    exit 1
+}
+
+# seprate each event's result t its separate directory
+function separate_result() {
+    pushd $tmp_dir
+    perf report -i $sample_dir/perf.data.$1 -F +period > $tmp_dir/perf.report.$1
+    echo "$(tail -n +6 $tmp_dir/perf.report.$1)" > $tmp_dir/perf.report.$1
+    csplit -s -k -z -f report.tmp. perf.report.$1 '/Sample/' {*}
+    for FILE in $tmp_dir/report.*
+    do
+	event=`sed -n -e "s/#\sSamples:.*of\sevent\s'\(.*\)'/\1/p" $FILE`;
+	event=`echo $event | tr '[:upper:]' '[:lower:]'`
+	event_dir=$sample_dir/$event
+	mkdir -p $event_dir
+	cp $FILE $event_dir/perf.report.$1
+    done
+    popd
+}
+
+# start capture
+while [ $count -lt $loop ]
+do
+    echo "start perf record iter $count"
+    ts=$(date +'%H%M%S')
+    perf record $sample_rate $mon_events -p `pidof fp-rte` -o $sample_dir/perf.data.$ts sleep 10
+    separate_result $ts
+    count=`expr $count + 1`
+    sleep 2 
+done
+
+if [[ -v comment ]]
+then
+    echo -e $comment > $sample_dir/version_comment
+fi
+

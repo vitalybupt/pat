@@ -1,0 +1,113 @@
+#!/bin/sh --
+base_dir="/mnt/flash/pat_workspace"
+unset -v event filter
+
+# default event list
+declare -a events=(
+    cycles
+    instructions
+    cache-misses
+    L1-dcache-load-misses
+    branch-load-misses
+)
+declare -A events_map
+for key in "${!events[@]}"; do events_map[${events[$key]}]="$key"; done
+
+event=cycles
+days_date=$(date +'%m%d%Y')
+filter=npf
+
+while getopts e:d: option
+do
+  case "${option}" in
+      (e)
+ 	  e=(${OPTARG})
+	  [ ! -n "${events_map[$e]}" ] && echo "Event: $e is not supported" >&2 && exit 3;
+          event=($e);;
+      (d) days_date=${OPTARG};;
+      (f) filter=${OPTARG};;
+      (*) exit 1;;
+  esac
+done
+shift "$((OPTIND - 1))"
+
+if [ $# -gt 1 ]; then
+    echo The number of arguments provided is incorrect.
+    exit 1
+fi
+
+# check if workspace set in environment variable
+# if yes we will use it as base_dir
+# else default location will be used
+if [ -v PAT_WOKRSPACE ]
+then
+    base_dir=$PAT_WORKSPACE
+fi
+
+if [ ! -d $base_dir ]
+then
+    echo "Invalid workspace: $base_dir!"
+    exit 1;
+fi
+
+if [ $# -eq 1 ]; then
+    if [ $1 -le -1 ]; then
+	line=$((0-$1))
+	sample_dir=$(ls -td -- $base_dir"/"$days_date/* | head -n $line | tail -n 1)
+    else
+	sample_dir=$base_dir"/"$days_date/$1/
+    fi
+else
+    sample_dir=$(ls -td -- $base_dir"/"$days_date/* | head -n 1)
+fi
+
+if [ ! -d $sample_dir ]
+then
+    echo "Invalid sample dir: $sample_dir!"
+    exit 2;
+fi
+
+event=`echo $event | tr '[:upper:]' '[:lower:]'`
+event_dir=$sample_dir/$event
+if [ ! -d $event_dir ]
+then
+    echo "Invalid event: $event!"
+    exit 2;
+fi
+
+sample_count=`ls $event_dir/perf.report* | wc -l`
+
+all_event=0
+
+#while IFS= read -r -d '' -u 9
+
+for FILE in "$event_dir/"perf\.report.*
+do
+    all_event=$((all_event+`sed -n -e 's/#\sEvent\scount.*:\s\(.*\)/\1/p' $FILE`)); 
+done 
+
+echo "total event number on all modules is: $(($all_event/$sample_count))"
+
+awk -v sample_count=$sample_count '!/^#/  {total_pct=total_pct+$1; total_event=total_event+$2; map[$6]=map[$6]+$2}
+     END{			  
+        printf "total percentage for npf: %d/%\n", total_pct/sample_count;
+        printf "total event number for npf: %d\n", total_event/sample_count;
+        for ( i in map) tmpidx[sprintf("%12s", map[i]),i] = i;
+        num = asorti(tmpidx);
+        for (i=1; i<=num; i++) {
+            split(tmpidx[i], tmp, SUBSEP);
+            indices[++j] = tmp[2];
+            };
+        for (i=1; i<=num; i++) printf "%s    %d    %f/%\n", indices[i], map[indices[i]]/sample_count, map[indices[i]]/total_event*100
+     }' $event_dir/perf.report*
+
+
+#while IFS= read -r -d '' -u 9
+#do
+#    echo "$REPLY"
+#done 9< <( find $1 -type f -exec printf '%s\0' {} + )
+
+
+
+
+

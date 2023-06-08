@@ -1,0 +1,84 @@
+#!/bin/bash
+base_dir="/mnt/flash/pat_workspace"
+
+# By Default We Only Show Today's Report
+days_date=$(date +'%m%d%Y')
+
+# check if workspace set in environment variable
+# if yes we will use it as base_dir
+# else default location will be used
+if [ -v PAT_WOKRSPACE ]
+then
+    if [ ! -d $PAT_WORKSPACE ]
+       then
+	   mkdir $PAT_WORKSPACE
+    fi
+    base_dir=$PAT_WORKSPACE
+fi
+
+while getopts ":hd:a" option
+do
+  case "${option}" in
+      d)
+	  days_date=${OPTARG};;
+      a)
+	  show_all=1;;
+      h)
+	  echo "show usage!";;
+      :)
+	  echo "$0: Must suppply an argument to -$OPTARG." >&2
+	  exit 1;;
+      ?)
+          echo "Invalid option: -${OPTARG}."
+          exit 2;;
+  esac
+done
+
+shift "$((OPTIND - 1))"
+
+if [ $# -gt 1 ]; then
+    echo The number of arguments provided is incorrect.
+    exit 1
+fi
+
+if [ $# -eq 1 ]; then
+    if [ $1 -le -1 ]; then
+	line=$((0-$1))
+	sample_dir=$(ls -td -- $base_dir"/"$days_date/* | head -n $line | tail -n 1)
+    else
+	sample_dir=$base_dir"/"$days_date/$1/
+    fi
+fi
+
+# Show Specified Sample
+function show_sample() {
+    s=$1
+    echo "    sample: $(basename "$s") - $(stat -c '%y' "$s")"
+    sed "s/^/    /" $s/version_comment
+}
+
+# Show All Reports In Specified Day's
+function show_day() {
+    echo "Day: $(basename "$1")"
+    for s in "$1"/*/; do
+	show_sample $s
+        echo
+    done
+}
+
+if [ -v show_all ]; then
+    for d in "$base_dir"/*/; do
+	show_day $d
+    done
+    exit 0
+fi
+
+if [ -v sample_dir ]; then
+    show_sample $sample_dir
+    exit 0
+fi
+
+echo "show all samples in day $days_date\n"
+show_day $base_dir"/"$days_date/
+exit 0
+
